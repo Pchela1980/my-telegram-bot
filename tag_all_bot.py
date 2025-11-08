@@ -1,14 +1,14 @@
 # =================================================================
-# ==     ВЕРСИЯ С УЛУЧШЕННОЙ ДИАГНОСТИКОЙ КОМАНДЫ /all     ==
+# ==     ФИНАЛЬНАЯ ВЕРСИЯ (с симуляцией тега @все)     ==
 # =================================================================
 
 import logging
 import os
 import json
-import re # Импортируем модуль для экранирования символов
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.error import BadRequest # Импортируем класс ошибки для отлова
+from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -45,7 +45,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         'Привет! Я бот для упоминания всех участников. \n'
         'Администратор может использовать команду /checkin, чтобы начать перекличку, \n'
-        'а затем /all [заголовок: текст], чтобы отправить всем уведомление.'
+        'а затем /all [текст], чтобы отправить всем уведомление.'
     )
 
 async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -89,9 +89,10 @@ async def remember_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.info(f"+++ Запомнил нового пользователя: {user.first_name} (из обычного сообщения)")
         save_data()
 
-# --- ФУНКЦИЯ tag_all С УЛУЧШЕННОЙ ДИАГНОСТИКОЙ И ИСПРАВЛЕНИЕМ ---
+# --- ПОЛНОСТЬЮ ПЕРЕДЕЛАННАЯ ФУНКЦИЯ tag_all ---
 async def tag_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.info(f"[DIAGNOSTICS] Получена команда /all от {update.effective_user.first_name}")
+    """Обработчик команды /all. Отправляет сообщение с визуальным тегом @все."""
+    logger.info(f"Получена команда /all от {update.effective_user.first_name}")
     user = update.message.from_user
     chat_id = update.message.chat_id
     try:
@@ -104,48 +105,43 @@ async def tag_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     admin_message_text = " ".join(context.args)
-    logger.info(f"[DIAGNOSTICS] Текст от админа: {admin_message_text}")
     if not admin_message_text:
         await update.message.reply_text("Пожалуйста, напишите сообщение после команды /all.")
         return
     if not chat_members.get(chat_id):
-        await update.message.reply_text("Пока никто не отметился.")
+        await update.message.reply_text("Пока никто не отметился. Используйте /checkin.")
         return
 
-    # --- ИСПРАВЛЕНИЕ: Функция для экранирования спецсимволов для MarkdownV2 ---
+    # Функция для экранирования спецсимволов для MarkdownV2
     def escape_markdown(text: str) -> str:
-        # Экранируем все зарезервированные символы
         escape_chars = r'_*[]()~`>#+-.=|{}!'
         return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
-    if ":" in admin_message_text:
-        parts = admin_message_text.split(":", 1)
-        title = escape_markdown(parts[0].strip())
-        body = escape_markdown(parts[1].strip())
-        formatted_message = f"*{title}*\n\n{body}"
-    else:
-        formatted_message = escape_markdown(admin_message_text)
+    # --- НАЧАЛО НОВОЙ ЛОГИКИ С ТЕГОМ @все ---
     
-    logger.info(f"[DIAGNOSTICS] Отформатированный текст: {formatted_message}")
+    # Визуальный тег, который увидят пользователи. Делаем его жирным.
+    visual_tag = "*@все*"
+    
+    # Экранируем сообщение админа, чтобы избежать ошибок форматирования
+    escaped_admin_message = escape_markdown(admin_message_text)
+
+    # Соединяем визуальный тег и сообщение админа
+    formatted_message = f"{visual_tag}\n\n{escaped_admin_message}"
+
+    # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
 
     user_list = chat_members.get(chat_id, {})
-    logger.info(f"[DIAGNOSTICS] Список пользователей для тега: {user_list}")
-    
-    # Создаем невидимые упоминания, экранируя имена на всякий случай
     invisible_mentions = [f"[\u200b](tg://user?id={uid})" for uid in user_list.keys()]
     mentions_text = "".join(invisible_mentions)
     
     final_message = f"{formatted_message}\n{mentions_text}"
-    logger.info(f"[DIAGNOSTICS] Финальное сообщение для отправки (без упоминаний): {formatted_message}")
 
     try:
         await context.bot.send_message(chat_id, final_message, parse_mode=ParseMode.MARKDOWN_V2)
-        logger.info("[DIAGNOSTICS] Сообщение с тегами успешно отправлено.")
     except BadRequest as e:
-        # --- ЛОВИМ ОШИБКУ ---
-        logger.error(f"[DIAGNOSTICS] !!! TELEGRAM ВЕРНУЛ ОШИБКУ: {e.message}")
-        # Отправляем сообщение без форматирования, чтобы оно точно дошло
-        await context.bot.send_message(chat_id, f"{admin_message_text}\n{mentions_text}", parse_mode=ParseMode.MARKDOWN_V2)
+        logger.error(f"!!! TELEGRAM ВЕРНУЛ ОШИБКУ: {e.message}")
+        # Если форматирование не удалось, отправляем как есть, но с уведомлениями
+        await context.bot.send_message(chat_id, f"@все\n\n{admin_message_text}\n{mentions_text}", parse_mode=ParseMode.MARKDOWN_V2)
 
     try:
         await update.message.delete()
