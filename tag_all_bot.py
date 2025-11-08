@@ -82,7 +82,7 @@ async def tag_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_list = chat_members.get(chat_id, {})
     mentions = [f"[{name.replace(']', '').replace('[', '')}](tg://user?id={uid})" for uid, name in user_list.items()]
     text = " ".join(mentions)
-    await update.message.reply_text("Общий сбор!", quote=False)
+    await update.message.reply_text("Общий сбор!")
     await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2)
 
 def main() -> None:
