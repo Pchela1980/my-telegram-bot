@@ -1,1 +1,0 @@
-worker: python tag_all_bot.py
