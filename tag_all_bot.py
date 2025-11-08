@@ -1,26 +1,20 @@
 # =================================================================
-# ==         ВЕРСИЯ БОТА С ПОДДЕРЖКОЙ ФАЙЛОВОЙ БД         ==
+# ==     ВЕРСИЯ С УЛУЧШЕННОЙ ДИАГНОСТИКОЙ КОМАНДЫ /all     ==
 # =================================================================
 
 import logging
 import os
-import json # <--- Импортируем библиотеку для работы с JSON
+import json
+import re # Импортируем модуль для экранирования символов
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
+from telegram.error import BadRequest # Импортируем класс ошибки для отлова
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-
-# --- НОВЫЙ БЛОК: НАСТРОЙКА ФАЙЛА БД ---
-# Путь, куда мы примонтируем наш "рюкзак" (Volume) на Railway
-# Если запускаем локально, он создаст папку 'data'
 DATA_DIR = "/data" 
 DATA_FILE = os.path.join(DATA_DIR, "bot_data.json")
-
-# Создаем директорию, если ее не существует
 os.makedirs(DATA_DIR, exist_ok=True)
-# --- КОНЕЦ НОВОГО БЛОКА ---
-
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -29,38 +23,25 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# Эта переменная теперь будет загружаться из файла при старте
 chat_members = {}
 
-
-# --- НОВЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С ФАЙЛОМ ---
 def load_data():
-    """Загружает данные из JSON-файла в переменную chat_members."""
     global chat_members
     try:
         with open(DATA_FILE, "r") as f:
             chat_members = json.load(f)
-            # JSON хранит все ключи как строки, нужно конвертировать их обратно в числа
             chat_members = {int(k): v for k, v in chat_members.items()}
             logger.info("Данные успешно загружены из файла.")
-    except FileNotFoundError:
-        logger.warning("Файл данных не найден. Начинаем с пустым списком.")
-        chat_members = {}
-    except json.JSONDecodeError:
-        logger.error("Ошибка чтения JSON. Файл может быть поврежден. Начинаем с пустым списком.")
+    except (FileNotFoundError, json.JSONDecodeError):
+        logger.warning("Файл данных не найден или поврежден. Начинаем с пустым списком.")
         chat_members = {}
 
 def save_data():
-    """Сохраняет текущие данные из chat_members в JSON-файл."""
     with open(DATA_FILE, "w") as f:
         json.dump(chat_members, f, indent=4)
         logger.info("Данные успешно сохранены в файл.")
 
-# --- КОНЕЦ НОВЫХ ФУНКЦИЙ ---
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (код без изменений)
     await update.message.reply_text(
         'Привет! Я бот для упоминания всех участников. \n'
         'Администратор может использовать команду /checkin, чтобы начать перекличку, \n'
@@ -68,7 +49,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (код без изменений)
     keyboard = [[InlineKeyboardButton("✅ Я здесь!", callback_data="user_check_in")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Начинаем перекличку! Нажмите на кнопку ниже, чтобы я вас запомнил:", reply_markup=reply_markup)
@@ -78,18 +58,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user = query.from_user
     chat_id = query.message.chat_id
     await query.answer()
-
-    # В новой версии ID чатов хранятся как числа, а не строки
     if chat_id not in chat_members:
         chat_members[chat_id] = {}
-
     if str(user.id) not in chat_members[chat_id]:
-        chat_members[chat_id][str(user.id)] = user.first_name # Сохраняем ID пользователя как строку, т.к. JSON этого требует
+        chat_members[chat_id][str(user.id)] = user.first_name
         logger.info(f"+++ Пользователь {user.first_name} отметил себя в чате {chat_id}")
         await query.answer(text=f"Спасибо, {user.first_name}, я вас запомнил!", show_alert=False)
-        
-        save_data() # <--- Сохраняем изменения в файл!
-
+        save_data()
         current_members = chat_members.get(chat_id, {})
         names_list = [name for name in current_members.values()]
         members_count = len(names_list)
@@ -105,7 +80,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer(text="Я вас уже знаю :)", show_alert=False)
 
 async def remember_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (эта функция теперь менее важна, но оставим ее)
     user = update.message.from_user
     chat_id = update.message.chat_id
     if chat_id not in chat_members:
@@ -113,11 +87,11 @@ async def remember_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if str(user.id) not in chat_members[chat_id]:
         chat_members[chat_id][str(user.id)] = user.first_name
         logger.info(f"+++ Запомнил нового пользователя: {user.first_name} (из обычного сообщения)")
-        save_data() # <--- И здесь тоже сохраняем
+        save_data()
 
+# --- ФУНКЦИЯ tag_all С УЛУЧШЕННОЙ ДИАГНОСТИКОЙ И ИСПРАВЛЕНИЕМ ---
 async def tag_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # ... (код почти без изменений)
-    logger.info(f"Получена команда /all от {update.effective_user.first_name}")
+    logger.info(f"[DIAGNOSTICS] Получена команда /all от {update.effective_user.first_name}")
     user = update.message.from_user
     chat_id = update.message.chat_id
     try:
@@ -128,42 +102,61 @@ async def tag_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
     except Exception:
         return
+
     admin_message_text = " ".join(context.args)
+    logger.info(f"[DIAGNOSTICS] Текст от админа: {admin_message_text}")
     if not admin_message_text:
-        await update.message.reply_text("Пожалуйста, напишите сообщение после команды /all. Например: `/all Заголовок: текст сообщения`")
+        await update.message.reply_text("Пожалуйста, напишите сообщение после команды /all.")
         return
     if not chat_members.get(chat_id):
-        await update.message.reply_text("Пока никто не отметился. Используйте /checkin.")
+        await update.message.reply_text("Пока никто не отметился.")
         return
+
+    # --- ИСПРАВЛЕНИЕ: Функция для экранирования спецсимволов для MarkdownV2 ---
+    def escape_markdown(text: str) -> str:
+        # Экранируем все зарезервированные символы
+        escape_chars = r'_*[]()~`>#+-.=|{}!'
+        return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+
     if ":" in admin_message_text:
         parts = admin_message_text.split(":", 1)
-        title = parts[0].strip()
-        body = parts[1].strip()
-        # Экранируем символы для MarkdownV2
-        title = title.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]")
-        body = body.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]")
+        title = escape_markdown(parts[0].strip())
+        body = escape_markdown(parts[1].strip())
         formatted_message = f"*{title}*\n\n{body}"
     else:
-        formatted_message = admin_message_text.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]")
+        formatted_message = escape_markdown(admin_message_text)
+    
+    logger.info(f"[DIAGNOSTICS] Отформатированный текст: {formatted_message}")
+
     user_list = chat_members.get(chat_id, {})
+    logger.info(f"[DIAGNOSTICS] Список пользователей для тега: {user_list}")
+    
+    # Создаем невидимые упоминания, экранируя имена на всякий случай
     invisible_mentions = [f"[\u200b](tg://user?id={uid})" for uid in user_list.keys()]
     mentions_text = "".join(invisible_mentions)
+    
     final_message = f"{formatted_message}\n{mentions_text}"
-    await context.bot.send_message(chat_id, final_message, parse_mode=ParseMode.MARKDOWN_V2)
+    logger.info(f"[DIAGNOSTICS] Финальное сообщение для отправки (без упоминаний): {formatted_message}")
+
+    try:
+        await context.bot.send_message(chat_id, final_message, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info("[DIAGNOSTICS] Сообщение с тегами успешно отправлено.")
+    except BadRequest as e:
+        # --- ЛОВИМ ОШИБКУ ---
+        logger.error(f"[DIAGNOSTICS] !!! TELEGRAM ВЕРНУЛ ОШИБКУ: {e.message}")
+        # Отправляем сообщение без форматирования, чтобы оно точно дошло
+        await context.bot.send_message(chat_id, f"{admin_message_text}\n{mentions_text}", parse_mode=ParseMode.MARKDOWN_V2)
+
     try:
         await update.message.delete()
     except Exception as e:
         logger.warning(f"Не удалось удалить команду /all: {e}")
 
-
 def main() -> None:
-    """Основная функция, которая настраивает и запускает бота."""
     if not BOT_TOKEN:
         logger.error("!!! КРИТИЧЕСКАЯ ОШИБКА: Токен бота не найден!")
         return
-        
-    load_data() # <--- Загружаем данные при старте!
-
+    load_data()
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("all", tag_all))
