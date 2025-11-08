@@ -1,5 +1,5 @@
 # =================================================================
-# ==     ФИНАЛЬНАЯ ВЕРСИЯ (с редактированием и счетчиком)     ==
+# ==     ФИНАЛЬНАЯ ВЕРСИЯ (с отправкой текста сообщения)     ==
 # =================================================================
 
 import logging
@@ -27,7 +27,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         'Привет! Я бот для упоминания всех участников. \n'
         'Администратор может использовать команду /checkin, чтобы начать перекличку, \n'
-        'а затем /all, чтобы упомянуть всех отметившихся.'
+        'а затем /all [текст], чтобы отправить всем уведомление с вашим сообщением.'
     )
 
 async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -35,7 +35,6 @@ async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Начинаем перекличку! Нажмите на кнопку ниже, чтобы я вас запомнил:", reply_markup=reply_markup)
 
-# --- ОБНОВЛЕННАЯ ФУНКЦИЯ ДЛЯ ОБРАБОТКИ НАЖАТИЯ КНОПКИ ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     user = query.from_user
@@ -51,19 +50,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.info(f"+++ Пользователь {user.first_name} отметил себя в чате {chat_id}")
         await query.answer(text=f"Спасибо, {user.first_name}, я вас запомнил!", show_alert=False)
 
-        # --- БЛОК РЕДАКТИРОВАНИЯ СООБЩЕНИЯ ---
-        
         current_members = chat_members.get(chat_id, {})
         names_list = [name for name in current_members.values()]
-        
-        # --- НОВОЕ ИЗМЕНЕНИЕ: ПОЛУЧАЕМ КОЛИЧЕСТВО ---
         members_count = len(names_list)
-        
         text_of_names = ", ".join(names_list)
-
-        # --- НОВОЕ ИЗМЕНЕНИЕ: ДОБАВЛЯЕМ СЧЕТЧИК В ТЕКСТ ---
         new_text = f"Перекличка! Уже отметились ({members_count}):\n\n{text_of_names}"
-
         keyboard = [[InlineKeyboardButton("✅ Я здесь!", callback_data="user_check_in")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -75,7 +66,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         await query.answer(text="Я вас уже знаю :)", show_alert=False)
 
-
 async def remember_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.message.from_user
     chat_id = update.message.chat_id
@@ -85,28 +75,52 @@ async def remember_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.info(f"+++ Запомнил нового пользователя: {user.first_name} (из обычного сообщения)")
         chat_members[chat_id][user.id] = user.first_name
 
+# --- ПОЛНОСТЬЮ ПЕРЕДЕЛАННАЯ ФУНКЦИЯ tag_all ---
 async def tag_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /all. Отправляет текст админа с невидимыми упоминаниями."""
+    logger.info(f"Получена команда /all от {update.effective_user.first_name}")
+    
     user = update.message.from_user
     chat_id = update.message.chat_id
+
     try:
         chat_admins = await context.bot.get_chat_administrators(chat_id)
         admin_ids = [admin.user.id for admin in chat_admins]
         if user.id not in admin_ids:
-            await update.message.reply_text("Эту команду могут использовать только администраторы.")
+            await update.message.delete()
             return
     except Exception:
-        await update.message.reply_text("Не могу проверить права, убедитесь, что я админ.")
+        return
+
+    # Получаем текст, который админ написал ПОСЛЕ команды /all
+    # context.args - это список слов после команды
+    admin_message = " ".join(context.args)
+    if not admin_message:
+        await update.message.reply_text("Пожалуйста, напишите сообщение после команды /all. Например: `/all Срочный сбор!`")
         return
 
     if not chat_members.get(chat_id):
         await update.message.reply_text("Пока никто не отметился. Используйте /checkin, чтобы начать перекличку.")
         return
 
+    # Собираем НЕВИДИМЫЕ упоминания
     user_list = chat_members.get(chat_id, {})
-    mentions = [f"[{name.replace(']', '').replace('[', '')}](tg://user?id={uid})" for uid, name in user_list.items()]
-    text = " ".join(mentions)
-    await update.message.reply_text("Общий сбор!")
-    await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN_V2)
+    # \u200b - это специальный символ "пробел нулевой ширины"
+    invisible_mentions = [f"[\u200b](tg://user?id={uid})" for uid in user_list.keys()]
+    mentions_text = "".join(invisible_mentions)
+
+    # Соединяем текст админа и невидимые упоминания
+    final_message = f"{admin_message}\n{mentions_text}"
+
+    # Отправляем итоговое сообщение
+    await context.bot.send_message(chat_id, final_message, parse_mode=ParseMode.MARKDOWN_V2)
+    
+    # Удаляем исходное сообщение с командой /all
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.warning(f"Не удалось удалить команду /all: {e}")
+
 
 def main() -> None:
     if not BOT_TOKEN:
