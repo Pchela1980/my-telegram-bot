@@ -1,14 +1,14 @@
 # =================================================================
-# ==     ВЕРСИЯ БОТА, ГОТОВАЯ К ПУБЛИКАЦИИ В ИНТЕРНЕТЕ     ==
+# ==     ФИНАЛЬНАЯ ВЕРСИЯ (с редактированием и счетчиком)     ==
 # =================================================================
 
 import logging
-import os # <--- Этот модуль нужен для работы с переменными окружения
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 
-# ↓↓↓ ТЕПЕРЬ БОТ БУДЕТ БРАТЬ ТОКЕН ИЗ СЕКРЕТНОГО ХРАНИЛИЩА RENDER ↓↓↓
+# ↓↓↓ Бот будет брать токен из секретного хранилища Render ↓↓↓
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # Настройка логирования
@@ -35,6 +35,7 @@ async def checkin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Начинаем перекличку! Нажмите на кнопку ниже, чтобы я вас запомнил:", reply_markup=reply_markup)
 
+# --- ОБНОВЛЕННАЯ ФУНКЦИЯ ДЛЯ ОБРАБОТКИ НАЖАТИЯ КНОПКИ ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     user = query.from_user
@@ -49,9 +50,31 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         chat_members[chat_id][user.id] = user.first_name
         logger.info(f"+++ Пользователь {user.first_name} отметил себя в чате {chat_id}")
         await query.answer(text=f"Спасибо, {user.first_name}, я вас запомнил!", show_alert=False)
+
+        # --- БЛОК РЕДАКТИРОВАНИЯ СООБЩЕНИЯ ---
+        
+        current_members = chat_members.get(chat_id, {})
+        names_list = [name for name in current_members.values()]
+        
+        # --- НОВОЕ ИЗМЕНЕНИЕ: ПОЛУЧАЕМ КОЛИЧЕСТВО ---
+        members_count = len(names_list)
+        
+        text_of_names = ", ".join(names_list)
+
+        # --- НОВОЕ ИЗМЕНЕНИЕ: ДОБАВЛЯЕМ СЧЕТЧИК В ТЕКСТ ---
+        new_text = f"Перекличка! Уже отметились ({members_count}):\n\n{text_of_names}"
+
+        keyboard = [[InlineKeyboardButton("✅ Я здесь!", callback_data="user_check_in")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        try:
+            await query.message.edit_text(text=new_text, reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Не удалось отредактировать сообщение: {e}")
+
     else:
-        logger.info(f"--- Пользователь {user.first_name} уже был отмечен.")
         await query.answer(text="Я вас уже знаю :)", show_alert=False)
+
 
 async def remember_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.message.from_user
